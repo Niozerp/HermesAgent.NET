@@ -55,8 +55,9 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
                     ? "chat/completions"
                     : "v1/chat/completions";
 
-                _logger.LogInformation("Provider configured: base={BaseUri} endpoint={Endpoint} model={Model}",
-            baseUri, _chatEndpoint, _options.Model);
+                // Diagnostic startup logging disabled to keep the interactive chat clean.
+                // _logger.LogInformation("Provider configured: base={BaseUri} endpoint={Endpoint} model={Model}",
+                //     baseUri, _chatEndpoint, _options.Model);
             }
 
             private readonly string _chatEndpoint;
