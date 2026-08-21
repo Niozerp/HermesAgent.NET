@@ -31,27 +31,35 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
         _logger = logger;
 
         var baseUrl = _options.BaseUrl ?? GetDefaultBaseUrl(_options.Provider);
-        _http.BaseAddress = new Uri(baseUrl);
-        _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_options.ApiKey}");
-        _http.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
 
-        // Resolve the chat-completions endpoint once. Default OpenAI-style base URLs
-        // (e.g. https://api.openai.com) get "/v1/chat/completions" appended; base URLs
-        // that already carry a version segment (e.g. https://api.z.ai/api/paas/v4,
-        // http://localhost:11434/v1, https://openrouter.ai/api/v1) get only
-        // "/chat/completions" to avoid double-version paths like /v4/v1/chat/completions.
-        var trimmed = baseUrl.TrimEnd('/');
-        _chatEndpoint = trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
-            || trimmed.EndsWith("/v2", StringComparison.OrdinalIgnoreCase)
-            || trimmed.EndsWith("/v3", StringComparison.OrdinalIgnoreCase)
-            || trimmed.EndsWith("/v4", StringComparison.OrdinalIgnoreCase)
-            || trimmed.Contains("/v1/", StringComparison.OrdinalIgnoreCase)
-            || trimmed.Contains("/paas/", StringComparison.OrdinalIgnoreCase)
-            ? "chat/completions"
-            : "v1/chat/completions";
-    }
+                // .NET Uri: when BaseAddress has no trailing slash, a relative URI like
+                // "chat/completions" replaces the *last segment* of the base path instead of
+                // appending.  Ensure trailing slash so relative endpoint appends correctly.
+                var baseUri = baseUrl.TrimEnd('/') + "/";
+                _http.BaseAddress = new Uri(baseUri);
 
-    private readonly string _chatEndpoint;
+                _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_options.ApiKey}");
+                _http.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+
+                // Resolve the chat-completions endpoint suffix once.
+                // Default OpenAI-style base URLs (e.g. https://api.openai.com) get "v1/..."
+                // appended; base URLs that already carry a version segment (e.g. /v4, /paas/v4)
+                // get just "chat/completions" to avoid double-version paths.
+                var trimmed = baseUrl.TrimEnd('/');
+                _chatEndpoint = trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.EndsWith("/v2", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.EndsWith("/v3", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.EndsWith("/v4", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.Contains("/v1/", StringComparison.OrdinalIgnoreCase)
+                    || trimmed.Contains("/paas/", StringComparison.OrdinalIgnoreCase)
+                    ? "chat/completions"
+                    : "v1/chat/completions";
+
+                _logger.LogDebug("Provider configured: base={BaseUri} endpoint={Endpoint} model={Model}",
+            baseUri, _chatEndpoint, _options.Model);
+            }
+
+            private readonly string _chatEndpoint;
 
     public async Task<LlmResponse> CompleteAsync(IReadOnlyList<Message> messages, IReadOnlyList<ToolDefinition>? tools = null, CancellationToken ct = default)
     {
