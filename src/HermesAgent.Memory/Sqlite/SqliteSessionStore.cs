@@ -69,6 +69,30 @@ public sealed class SqliteSessionStore : ISessionManager, IMemoryStore, IDisposa
             );
             """;
         cmd.ExecuteNonQuery();
+
+        // These columns were added after the initial schema shipped. SQLite's
+        // CREATE TABLE IF NOT EXISTS does not update an existing table, so
+        // migrate in place before any saved tool exchanges are read or written.
+        EnsureMessageColumn("tool_calls_json", "TEXT");
+        EnsureMessageColumn("tool_call_id", "TEXT");
+        EnsureMessageColumn("tool_name", "TEXT");
+    }
+
+    private void EnsureMessageColumn(string name, string type)
+    {
+        using var inspect = _db.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(messages)";
+        using var reader = inspect.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), name, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+        reader.Close();
+
+        using var alter = _db.CreateCommand();
+        alter.CommandText = $"ALTER TABLE messages ADD COLUMN {name} {type}";
+        alter.ExecuteNonQuery();
     }
 
     // ─── ISessionManager ─────────────────────────────────────────────────
@@ -110,11 +134,21 @@ public sealed class SqliteSessionStore : ISessionManager, IMemoryStore, IDisposa
             {
                 var ins = _db.CreateCommand();
                 ins.Transaction = (SqliteTransaction)tx;
-                ins.CommandText = "INSERT INTO messages (session_id, role, content, timestamp) VALUES (@sid, @role, @content, @ts)";
+                ins.CommandText = """
+                    INSERT INTO messages
+                        (session_id, role, content, timestamp, tool_calls_json, tool_call_id, tool_name)
+                    VALUES
+                        (@sid, @role, @content, @ts, @toolCalls, @toolCallId, @toolName)
+                    """;
                 ins.Parameters.AddWithValue("@sid", conversation.Id.ToString());
                 ins.Parameters.AddWithValue("@role", msg.Role);
                 ins.Parameters.AddWithValue("@content", msg.Content);
                 ins.Parameters.AddWithValue("@ts", msg.Timestamp.ToString("O"));
+                ins.Parameters.AddWithValue("@toolCalls", msg.ToolCalls is { Count: > 0 }
+                    ? (object)JsonSerializer.Serialize(msg.ToolCalls)
+                    : DBNull.Value);
+                ins.Parameters.AddWithValue("@toolCallId", (object?)msg.ToolCallId ?? DBNull.Value);
+                ins.Parameters.AddWithValue("@toolName", (object?)msg.ToolName ?? DBNull.Value);
                 await ins.ExecuteNonQueryAsync(ct);
             }
 
@@ -149,20 +183,58 @@ public sealed class SqliteSessionStore : ISessionManager, IMemoryStore, IDisposa
     public async Task<Conversation?> LoadSessionAsync(Guid sessionId, CancellationToken ct = default)
     {
         var cmd = _db.CreateCommand();
-        cmd.CommandText = "SELECT role, content, timestamp FROM messages WHERE session_id=@sid ORDER BY id";
+        cmd.CommandText = """
+            SELECT role, content, timestamp, tool_calls_json, tool_call_id, tool_name
+            FROM messages
+            WHERE session_id=@sid
+            ORDER BY id
+            """;
         cmd.Parameters.AddWithValue("@sid", sessionId.ToString());
 
         var conv = new Conversation(sessionId);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         bool found = false;
+        var pendingToolCallIds = new HashSet<string>(StringComparer.Ordinal);
         while (await reader.ReadAsync(ct))
         {
             found = true;
+            var role = reader.GetString(0);
+            var content = reader.GetString(1);
+            var toolCalls = reader.IsDBNull(3)
+                ? null
+                : JsonSerializer.Deserialize<List<ToolCall>>(reader.GetString(3));
+            var toolCallId = reader.IsDBNull(4) ? null : reader.GetString(4);
+            var toolName = reader.IsDBNull(5) ? null : reader.GetString(5);
+
+            if (toolCalls is { Count: > 0 })
+            {
+                foreach (var call in toolCalls)
+                    pendingToolCallIds.Add(call.Id);
+            }
+
+            // Sessions saved by older versions lost the assistant tool-call
+            // payload and correlation ID. Sending those orphaned `tool`
+            // messages back to an OpenAI-compatible API poisons every later
+            // request in the session. Drop only the unrecoverable protocol
+            // fragments; ordinary user/assistant history remains intact.
+            if (role == "tool" &&
+                (string.IsNullOrWhiteSpace(toolCallId) || !pendingToolCallIds.Remove(toolCallId)))
+            {
+                _log.LogWarning("Skipped orphaned tool result while repairing session {Id}", sessionId);
+                continue;
+            }
+
+            if (role == "assistant" && string.IsNullOrWhiteSpace(content) && toolCalls is not { Count: > 0 })
+                continue;
+
             conv.AddMessage(new Message
             {
-                Role = reader.GetString(0),
-                Content = reader.GetString(1),
-                Timestamp = DateTimeOffset.Parse(reader.GetString(2))
+                Role = role,
+                Content = content,
+                Timestamp = DateTimeOffset.Parse(reader.GetString(2)),
+                ToolCalls = toolCalls,
+                ToolCallId = toolCallId,
+                ToolName = toolName
             });
         }
         return found ? conv : null;

@@ -139,7 +139,10 @@ public sealed class FileSessionManager : ISessionManager
             {
                 Role = m.Role,
                 Content = m.Content,
-                Timestamp = m.Timestamp
+                Timestamp = m.Timestamp,
+                ToolCalls = m.ToolCalls,
+                ToolCallId = m.ToolCallId,
+                ToolName = m.ToolName
             }).ToList()
         };
 
@@ -157,13 +160,33 @@ public sealed class FileSessionManager : ISessionManager
         if (dto is null) return null;
 
         var conversation = new Conversation(dto.Id);
+        var pendingToolCallIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var msg in dto.Messages)
         {
+            if (msg.ToolCalls is { Count: > 0 })
+            {
+                foreach (var call in msg.ToolCalls)
+                    pendingToolCallIds.Add(call.Id);
+            }
+
+            if (msg.Role == "tool" &&
+                (string.IsNullOrWhiteSpace(msg.ToolCallId) || !pendingToolCallIds.Remove(msg.ToolCallId)))
+            {
+                _logger.LogWarning("Skipped orphaned tool result while repairing session {Id}", sessionId);
+                continue;
+            }
+
+            if (msg.Role == "assistant" && string.IsNullOrWhiteSpace(msg.Content) && msg.ToolCalls is not { Count: > 0 })
+                continue;
+
             conversation.AddMessage(new Message
             {
                 Role = msg.Role,
                 Content = msg.Content,
-                Timestamp = msg.Timestamp
+                Timestamp = msg.Timestamp,
+                ToolCalls = msg.ToolCalls,
+                ToolCallId = msg.ToolCallId,
+                ToolName = msg.ToolName
             });
         }
         conversation.Title = dto.Title;
@@ -238,6 +261,9 @@ public sealed class FileSessionManager : ISessionManager
         public required string Role { get; set; }
         public required string Content { get; set; }
         public DateTimeOffset Timestamp { get; set; }
+        public IReadOnlyList<ToolCall>? ToolCalls { get; set; }
+        public string? ToolCallId { get; set; }
+        public string? ToolName { get; set; }
     }
 }
 

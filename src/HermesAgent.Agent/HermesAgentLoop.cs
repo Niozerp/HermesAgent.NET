@@ -66,7 +66,10 @@ public sealed class HermesAgentLoop : IAgent
             await MaybeCompressContextAsync(conversation, ct);
 
             var messages = await BuildMessagesAsync(conversation, ct);
-            var response = await _llm.CompleteAsync(messages, toolDefs, ct);
+            // Reserve the last configured turn for a user-visible answer. This
+            // prevents the loop from ending immediately after a tool result.
+            var availableTools = turn < _options.Agent.MaxTurns ? toolDefs : null;
+            var response = await _llm.CompleteAsync(messages, availableTools, ct);
 
             if (response.ToolCalls.Count > 0)
             {
@@ -78,8 +81,12 @@ public sealed class HermesAgentLoop : IAgent
                 conversation.AddMessage(Message.Assistant(response.Content));
             }
 
-            if (response.ToolCalls.Count == 0 || response.FinishReason == "stop")
+            if (response.ToolCalls.Count == 0)
+            {
+                if (string.IsNullOrWhiteSpace(response.Content))
+                    throw new InvalidOperationException("The LLM returned neither text nor a tool call.");
                 break;
+            }
 
             var toolResults = await ExecuteToolsParallelAsync(response.ToolCalls, ct);
             results.AddRange(toolResults);
@@ -125,9 +132,10 @@ public sealed class HermesAgentLoop : IAgent
 
             var fullText = new System.Text.StringBuilder();
             var toolCallMap = new Dictionary<int, (string? Id, string? Name, System.Text.StringBuilder Args)>();
-            string? finishReason = null;
-
-            await foreach (var evt in _llm.StreamAsync(messages, toolDefs, ct))
+            // Reserve the last configured turn for synthesis instead of
+            // allowing a final tool call with no turn left to explain it.
+            var availableTools = turn < _options.Agent.MaxTurns ? toolDefs : null;
+            await foreach (var evt in _llm.StreamAsync(messages, availableTools, ct))
             {
                 if (evt is LlmStreamEvent.ContentDelta content)
                 {
@@ -148,30 +156,48 @@ public sealed class HermesAgentLoop : IAgent
 
                     toolCallMap[tool.Index] = entry;
                 }
-                else if (evt is LlmStreamEvent.Completed comp)
-                {
-                    finishReason = comp.FinishReason;
-                }
             }
 
-            if (toolCallMap.Count == 0)
+            List<ToolCall>? fallbackToolCalls = null;
+            if (toolCallMap.Count == 0 && fullText.Length == 0)
+            {
+                // Some OpenAI-compatible endpoints occasionally close a
+                // nominal streaming response without emitting any usable SSE
+                // deltas. Retry the same turn once through the non-streaming
+                // endpoint so the CLI never silently accepts an empty turn.
+                _logger.LogWarning("Streaming returned no text or tool calls; retrying non-streaming");
+                var fallback = await _llm.CompleteAsync(messages, availableTools, ct);
+                if (!string.IsNullOrEmpty(fallback.Content))
+                {
+                    fullText.Append(fallback.Content);
+                    yield return new AgentEvent.TextDelta(fallback.Content);
+                }
+
+                if (fallback.ToolCalls.Count > 0)
+                    fallbackToolCalls = fallback.ToolCalls.ToList();
+            }
+
+            if (toolCallMap.Count == 0 && fallbackToolCalls is null)
             {
                 var assistantMsg = fullText.ToString();
-                if (!string.IsNullOrEmpty(assistantMsg))
-                    conversation.AddMessage(Message.Assistant(assistantMsg));
+                if (string.IsNullOrWhiteSpace(assistantMsg))
+                    throw new InvalidOperationException("The LLM returned neither text nor a tool call.");
+
+                conversation.AddMessage(Message.Assistant(assistantMsg));
                 break;
             }
 
-            var collectedToolCalls = toolCallMap.OrderBy(k => k.Key).Select(kvp =>
-            {
-                var val = kvp.Value;
-                return new ToolCall
+            var collectedToolCalls = fallbackToolCalls ??
+                toolCallMap.OrderBy(k => k.Key).Select(kvp =>
                 {
-                    Id = val.Id ?? Guid.NewGuid().ToString(),
-                    Name = val.Name ?? string.Empty,
-                    Arguments = OpenAiCompatibleProvider.ParseArguments(val.Args.ToString())
-                };
-            }).ToList();
+                    var val = kvp.Value;
+                    return new ToolCall
+                    {
+                        Id = val.Id ?? Guid.NewGuid().ToString(),
+                        Name = val.Name ?? string.Empty,
+                        Arguments = OpenAiCompatibleProvider.ParseArguments(val.Args.ToString())
+                    };
+                }).ToList();
 
             conversation.AddMessage(Message.AssistantToolCalls(fullText.ToString(), collectedToolCalls));
 
@@ -189,8 +215,9 @@ public sealed class HermesAgentLoop : IAgent
 
             yield return new AgentEvent.TurnCompleted(turn);
 
-            if (finishReason == "stop")
-                break;
+            // A few compatible providers report "stop" even when they emit
+            // tool calls. The presence of tool calls is authoritative: after
+            // executing them, always ask the model for the follow-up answer.
         }
 
         await _sessionManager.SaveSessionAsync(conversation, ct);
@@ -223,8 +250,57 @@ public sealed class HermesAgentLoop : IAgent
     {
         var systemPrompt = await _promptBuilder.BuildAsync(conversation, ct);
         var messages = new List<Message> { Message.System(systemPrompt) };
-        messages.AddRange(conversation.Messages);
+        messages.AddRange(GetProtocolSafeHistory(conversation.Messages));
         return messages;
+    }
+
+    private IEnumerable<Message> GetProtocolSafeHistory(IReadOnlyList<Message> history)
+    {
+        for (var i = 0; i < history.Count; i++)
+        {
+            var message = history[i];
+
+            if (message.Role == "tool")
+            {
+                _logger.LogWarning("Skipped orphaned tool result while building LLM context");
+                continue;
+            }
+
+            if (message.Role != "assistant" || message.ToolCalls is not { Count: > 0 })
+            {
+                if (message.Role == "assistant" && string.IsNullOrWhiteSpace(message.Content))
+                    continue;
+
+                yield return message;
+                continue;
+            }
+
+            var expectedIds = message.ToolCalls.Select(call => call.Id).ToHashSet(StringComparer.Ordinal);
+            var toolMessages = new List<Message>();
+            var cursor = i + 1;
+            while (cursor < history.Count && history[cursor].Role == "tool")
+            {
+                var toolMessage = history[cursor];
+                if (!string.IsNullOrWhiteSpace(toolMessage.ToolCallId) &&
+                    expectedIds.Remove(toolMessage.ToolCallId))
+                {
+                    toolMessages.Add(toolMessage);
+                }
+                cursor++;
+            }
+
+            if (expectedIds.Count > 0)
+            {
+                _logger.LogWarning("Skipped incomplete assistant tool-call exchange while building LLM context");
+                i = cursor - 1;
+                continue;
+            }
+
+            yield return message;
+            foreach (var toolMessage in toolMessages)
+                yield return toolMessage;
+            i = cursor - 1;
+        }
     }
 
     private async Task MaybeCompressContextAsync(Conversation conversation, CancellationToken ct)

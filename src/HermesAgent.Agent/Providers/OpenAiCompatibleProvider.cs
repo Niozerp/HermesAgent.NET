@@ -95,22 +95,53 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
         using var response = await _http.SendAsync(requestMsg, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
+        // A few "compatible" endpoints ignore stream=true and return one
+        // ordinary JSON response. Preserve that response instead of feeding it
+        // to the SSE reader and silently yielding no events.
+        if (string.Equals(response.Content.Headers.ContentType?.MediaType,
+                "application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await response.Content.ReadFromJsonAsync<OpenAiChatResponse>(JsonOpts, ct)
+                ?? throw new InvalidOperationException("Empty response from LLM");
+            var mapped = MapResponse(result);
+
+            if (!string.IsNullOrEmpty(mapped.Content))
+                yield return new LlmStreamEvent.ContentDelta(mapped.Content);
+
+            for (var index = 0; index < mapped.ToolCalls.Count; index++)
+            {
+                var call = mapped.ToolCalls[index];
+                yield return new LlmStreamEvent.ToolCallDelta(
+                    index,
+                    call.Id,
+                    call.Name,
+                    JsonSerializer.Serialize(call.Arguments, JsonOpts));
+            }
+
+            yield return new LlmStreamEvent.Completed(mapped.FinishReason);
+            yield break;
+        }
+
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
         while (!reader.EndOfStream && !ct.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(ct);
-            if (line is null || !line.StartsWith("data: ", StringComparison.Ordinal))
+            if (line is null || !line.StartsWith("data:", StringComparison.Ordinal))
                 continue;
 
-            var data = line["data: ".Length..];
+            var data = line["data:".Length..].TrimStart();
             if (data == "[DONE]")
                 break;
 
             OpenAiStreamChunk? chunk;
             try { chunk = JsonSerializer.Deserialize<OpenAiStreamChunk>(data, JsonOpts); }
-            catch { continue; }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Ignored malformed streaming chunk from {Provider}", Name);
+                continue;
+            }
 
             var choice = chunk?.Choices?.FirstOrDefault();
             if (choice is null) continue;
@@ -189,7 +220,9 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
         var result = new Dictionary<string, object?>
         {
             ["role"] = message.Role,
-            ["content"] = message.Content
+            ["content"] = message.ToolCalls is { Count: > 0 } && string.IsNullOrEmpty(message.Content)
+                ? null
+                : message.Content
         };
 
         if (message.ToolCalls is { Count: > 0 })
