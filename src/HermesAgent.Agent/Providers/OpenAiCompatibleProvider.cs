@@ -141,11 +141,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
 
     private object BuildRequest(IReadOnlyList<Message> messages, IReadOnlyList<ToolDefinition>? tools, bool stream)
     {
-        var msgs = messages.Select(m => new
-        {
-            role = m.Role,
-            content = m.Content
-        }).ToArray();
+        var msgs = messages.Select(BuildMessage).ToArray();
 
         if (tools is null || tools.Count == 0)
         {
@@ -186,6 +182,38 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
             // max_tokens = _options.MaxTokens,
             stream
         };
+    }
+
+    private static Dictionary<string, object?> BuildMessage(Message message)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["role"] = message.Role,
+            ["content"] = message.Content
+        };
+
+        if (message.ToolCalls is { Count: > 0 })
+        {
+            result["tool_calls"] = message.ToolCalls.Select(call => new
+            {
+                id = call.Id,
+                type = "function",
+                function = new
+                {
+                    name = call.Name,
+                    arguments = JsonSerializer.Serialize(call.Arguments, JsonOpts)
+                }
+            }).ToArray();
+        }
+
+        if (message.Role == "tool")
+        {
+            result["tool_call_id"] = message.ToolCallId;
+            if (!string.IsNullOrWhiteSpace(message.ToolName))
+                result["name"] = message.ToolName;
+        }
+
+        return result;
     }
 
     private static LlmResponse MapResponse(OpenAiChatResponse r)

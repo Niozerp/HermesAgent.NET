@@ -7,18 +7,34 @@ public sealed record Message
 {
     public required string Role { get; init; }
     public required string Content { get; init; }
+    public IReadOnlyList<ToolCall>? ToolCalls { get; init; }
+    public string? ToolCallId { get; init; }
+    public string? ToolName { get; init; }
     public DateTimeOffset Timestamp { get; init; } = DateTimeOffset.UtcNow;
     public IReadOnlyDictionary<string, object?>? Metadata { get; init; }
 
     public static Message User(string content) => new() { Role = "user", Content = content };
     public static Message Assistant(string content) => new() { Role = "assistant", Content = content };
+    public static Message AssistantToolCalls(string content, IReadOnlyList<ToolCall> toolCalls) => new()
+    {
+        Role = "assistant",
+        Content = content,
+        ToolCalls = toolCalls
+    };
     public static Message System(string content) => new() { Role = "system", Content = content };
-    public static Message ToolResult(string toolName, string result) => new()
+    public static Message ToolResult(string toolCallId, string toolName, string result) => new()
     {
         Role = "tool",
         Content = result,
+        ToolCallId = toolCallId,
+        ToolName = toolName,
         Metadata = new Dictionary<string, object?> { ["tool_name"] = toolName }
     };
+
+    // Kept for callers that do not yet have a tool-call ID. New agent-loop code
+    // must use the overload above so OpenAI-compatible APIs can correlate results.
+    public static Message ToolResult(string toolName, string result) =>
+        ToolResult(string.Empty, toolName, result);
 }
 
 /// <summary>Represents a full conversation session.</summary>
@@ -85,6 +101,7 @@ public sealed record LlmUsage(int PromptTokens, int CompletionTokens)
 public sealed record AgentRunResult
 {
     public required string FinalResponse { get; init; }
+    public Guid SessionId { get; init; }
     public int TurnsUsed { get; init; }
     public IReadOnlyList<ToolResult> ToolResults { get; init; } = [];
     public TimeSpan Duration { get; init; }

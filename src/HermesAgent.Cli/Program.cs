@@ -189,7 +189,7 @@ static async Task RunChatAsync(IServiceProvider sp)
                             if (!waitingForHermesText)
                                 Console.WriteLine();
 
-                            currentSession ??= Guid.NewGuid();
+                            currentSession = f.Result.SessionId;
 
                             AnsiConsole.MarkupLine(
                                 $"[dim]({f.Result.TurnsUsed} turns, " +

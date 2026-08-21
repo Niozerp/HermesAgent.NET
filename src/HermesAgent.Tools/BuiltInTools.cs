@@ -349,7 +349,8 @@ public sealed class ListDirectoryTool : ToolBase
                 : $"[FILE] {fi.Name} ({fi.Length:N0} bytes)")
             .OrderBy(x => x);
 
-        return Task.FromResult(string.Join('\n', entries));
+        var output = string.Join('\n', entries);
+        return Task.FromResult(string.IsNullOrEmpty(output) ? "(directory is empty)" : output);
     }
 }
 

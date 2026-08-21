@@ -50,4 +50,30 @@ public class ToolTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task ListDirectoryTool_ReturnsVisibleOutput_WhenDirectoryIsEmpty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+
+        try
+        {
+            var tool = new ListDirectoryTool();
+            var call = new ToolCall
+            {
+                Id = "3",
+                Name = "list_directory",
+                Arguments = new Dictionary<string, object?> { ["path"] = path }
+            };
+
+            var result = await tool.ExecuteAsync(call);
+
+            result.Output.Should().Be("(directory is empty)");
+        }
+        finally
+        {
+            Directory.Delete(path);
+        }
+    }
 }
