@@ -17,23 +17,78 @@ public abstract class ToolBase : ITool
         var sw = Stopwatch.StartNew();
         try
         {
+            // Guard against null call
+            if (call is null)
+            {
+                return new ToolResult
+                {
+                    ToolCallId = string.Empty,
+                    ToolName = Name,
+                    Output = "Error: Tool call was null.",
+                    IsError = true,
+                    Duration = sw.Elapsed
+                };
+            }
+
+            // Guard against missing/empty tool name
+            if (string.IsNullOrWhiteSpace(call.Name))
+            {
+                return new ToolResult
+                {
+                    ToolCallId = call.Id,
+                    ToolName = Name,
+                    Output = "Error: Tool call name was missing or empty.",
+                    IsError = true,
+                    Duration = sw.Elapsed
+                };
+            }
+
+            // Guard against null arguments dictionary
+            if (call.Arguments is null)
+            {
+                return new ToolResult
+                {
+                    ToolCallId = call.Id,
+                    ToolName = call.Name,
+                    Output = "Error: Tool call arguments dictionary was null.",
+                    IsError = true,
+                    Duration = sw.Elapsed
+                };
+            }
+
             var output = await ExecuteCoreAsync(call, ct);
             return new ToolResult
             {
                 ToolCallId = call.Id,
                 ToolName = call.Name,
-                Output = output,
+                Output = output ?? string.Empty,
                 IsError = false,
                 Duration = sw.Elapsed
             };
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             return new ToolResult
             {
                 ToolCallId = call.Id,
                 ToolName = call.Name,
-                Output = $"Error: {ex.Message}",
+                Output = "Error: Tool execution was cancelled (timeout or caller aborted).",
+                IsError = true,
+                Duration = sw.Elapsed
+            };
+        }
+        catch (Exception ex)
+        {
+            // Unwrap aggregate exceptions for clearer error messages
+            var message = ex is AggregateException agg
+                ? string.Join("; ", agg.InnerExceptions.Select(e => e.Message))
+                : ex.Message;
+
+            return new ToolResult
+            {
+                ToolCallId = call.Id,
+                ToolName = call.Name,
+                Output = $"Error: {message}",
                 IsError = true,
                 Duration = sw.Elapsed
             };
@@ -43,10 +98,16 @@ public abstract class ToolBase : ITool
     protected abstract Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct);
 
     protected static string GetArg(ToolCall call, string key)
-        => call.Arguments.TryGetValue(key, out var val) ? val?.ToString() ?? string.Empty : string.Empty;
+    {
+        if (call?.Arguments is null) return string.Empty;
+        return call.Arguments.TryGetValue(key, out var val) ? val?.ToString() ?? string.Empty : string.Empty;
+    }
 
     protected static string GetArgOrDefault(ToolCall call, string key, string defaultValue)
-        => call.Arguments.TryGetValue(key, out var val) && val is not null ? val.ToString()! : defaultValue;
+    {
+        if (call?.Arguments is null) return defaultValue;
+        return call.Arguments.TryGetValue(key, out var val) && val is not null ? val.ToString()! : defaultValue;
+    }
 }
 
 /// <summary>Executes shell commands (bash on Unix, cmd/powershell on Windows).</summary>
@@ -79,7 +140,12 @@ public sealed class ShellTool : ToolBase
     protected override async Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         var command = GetArg(call, "command");
+        if (string.IsNullOrWhiteSpace(command))
+            return "Error: command parameter is required and cannot be empty.";
+
         var timeout = int.TryParse(GetArgOrDefault(call, "timeout_seconds", "30"), out var t) ? t : 30;
+        if (timeout <= 0) timeout = 30;
+        if (timeout > 600) timeout = 600; // hard cap at 10 minutes
 
         _logger.LogInformation("Executing command: {Command}", command);
 
@@ -101,19 +167,72 @@ public sealed class ShellTool : ToolBase
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            }
+            },
+            EnableRaisingEvents = true
         };
 
         var sb = new System.Text.StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) sb.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) sb.AppendLine($"[stderr] {e.Data}"); };
+        var outputLock = new object();
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        process.Start();
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) lock (outputLock) sb.AppendLine(e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) lock (outputLock) sb.AppendLine($"[stderr] {e.Data}");
+        };
+        process.Exited += (_, _) => tcs.TrySetResult(true);
+
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to start process '{fileName}': {ex.Message}";
+        }
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        await process.WaitForExitAsync(cts.Token);
-        return sb.Length > 0 ? sb.ToString().Trim() : $"[exit code {process.ExitCode}]";
+        try
+        {
+            // Wait for exit OR cancellation, whichever comes first
+            using (cts.Token.Register(() => tcs.TrySetCanceled()))
+            {
+                await tcs.Task;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Timeout or cancellation — kill the process tree
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000); // give it 5s to die
+                }
+            }
+            catch { /* best effort */ }
+
+            lock (outputLock)
+            {
+                var partial = sb.ToString().Trim();
+                return $"Error: Command timed out after {timeout} seconds." +
+                       (partial.Length > 0 ? $"\nPartial output:\n{partial}" : string.Empty);
+            }
+        }
+
+        // Process exited normally
+        var exitCode = process.ExitCode;
+        lock (outputLock)
+        {
+            var output = sb.ToString().Trim();
+            return output.Length > 0 ? output : $"[exit code {exitCode}]";
+        }
     }
 }
 

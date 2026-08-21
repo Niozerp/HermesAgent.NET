@@ -42,8 +42,6 @@ Skills are procedures stored in Markdown format (following the [agentskills.io](
 - **HermesAgent.Agent**: The logic of the loop and LLM integrations.
 - **HermesAgent.Tools**: The implementation of various capabilities (File IO, Browser, etc.).
 - **HermesAgent.Memory / Skills**: Implementation of the persistence layers.
-- **HermesAgent.Web**: Exposes the agent via a standard REST API.
-- **HermesAgent.Gateway**: Bridge between the Agent and messaging platforms (Telegram/Discord).
 - **HermesAgent.Cli**: The main entry point for local human interaction.
 
 ## 5. Control Flow Diagram

@@ -128,7 +128,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
                 model = _options.Model,
                 messages = msgs,
                 temperature = _options.Temperature,
-                max_tokens = _options.MaxTokens,
+                // max_tokens = _options.MaxTokens,
                 stream
             };
         }
@@ -157,7 +157,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
             messages = msgs,
             tools = toolDefs,
             temperature = _options.Temperature,
-            max_tokens = _options.MaxTokens,
+            // max_tokens = _options.MaxTokens,
             stream
         };
     }

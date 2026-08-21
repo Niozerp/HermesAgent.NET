@@ -1,15 +1,13 @@
 # Hermes Agent — .NET Edition ☤
 
-A complete **.NET 10** implementation of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Hermes is a self-improving AI agent capable of persistent memory, autonomous skill creation, and multi-platform communication.
+A complete **.NET 9** implementation of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Hermes is a self-improving AI agent capable of persistent memory and autonomous skill creation.
 
-[![Build Status](https://img.shields.io/badge/.NET-10.0-blue.svg)](https://dotnet.microsoft.com/download)
+[![Build Status](https://img.shields.io/badge/.NET-9.0-blue.svg)](https://dotnet.microsoft.com/download)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📖 Extended Documentation
 
 - [**Architecture**](./ARCHITECTURE.md) — How the orchestration loop and memory systems work.
-- [**Web API Reference**](./API.md) — Full endpoint documentation for developers.
-- [**Gateway Guide**](./GATEWAY.md) — Connect Hermes to Telegram, Discord, and Webhooks.
 - [**Tool Reference**](./TOOLS.md) — Detailed list of all 35+ capabilities.
 
 ---
@@ -17,13 +15,13 @@ A complete **.NET 10** implementation of [NousResearch/hermes-agent](https://git
 ## 🚀 Quick Start
 
 ### Prerequisites
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
 - An API Key for an LLM provider (OpenAI, Anthropic, or OpenRouter)
 
 ### Installation
 ```bash
-git clone https://github.com/Gravicode/HermesAgent.git
-cd HermesAgent
+git clone https://github.com/Niozerp/HermesAgent.NET.git
+cd HermesAgent.NET
 ```
 
 ### Configuration
@@ -42,18 +40,10 @@ Hermes looks for configuration in several places. The easiest way to start is cr
 ```
 
 ### Running the Agent
-1.  **CLI (Interactive)**:
-    ```bash
-    dotnet run --project src/HermesAgent.Cli
-    ```
-2.  **Server (API)**:
-    ```bash
-    dotnet run --project src/HermesAgent.Web
-    ```
-3.  **Gateway (Bots)**:
-    ```bash
-    dotnet run --project src/HermesAgent.Gateway
-    ```
+**CLI (Interactive)**:
+```bash
+dotnet run --project src/HermesAgent.Cli
+```
 
 ---
 
@@ -66,8 +56,6 @@ Hermes looks for configuration in several places. The easiest way to start is cr
 | **HermesAgent.Tools** | Implementation of system, web, and browser tools. |
 | **HermesAgent.Memory** | SQLite/FTS5 implementation for conversation persistence. |
 | **HermesAgent.Skills** | Markdown-based skill management system. |
-| **HermesAgent.Web** | ASP.NET Core Minimal API with SSE streaming. |
-| **HermesAgent.Gateway** | Multi-platform messaging bridge. |
 | **HermesAgent.Cli** | Terminal-based TUI for local use. |
 
 ---

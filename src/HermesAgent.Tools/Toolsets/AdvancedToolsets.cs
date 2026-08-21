@@ -451,37 +451,174 @@ public sealed class ProcessTool : ToolBase
     protected override Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         var action = GetArg(call, "action");
-        return action switch
+        if (string.IsNullOrWhiteSpace(action))
+            return Task.FromResult("Error: action parameter is required.");
+
+        try
         {
-            "list" => ListProcesses(),
-            "kill" => KillProcess(GetArg(call, "id")),
-            "poll" => PollProcess(GetArg(call, "id")),
-            _      => Task.FromResult($"Action '{action}' requires active process management integration.")
-        };
+            return action switch
+            {
+                "list" => ListProcesses(),
+                "kill" => KillProcess(GetArg(call, "id")),
+                "poll" => PollProcess(GetArg(call, "id")),
+                "log"  => Task.FromResult(GetProcessLog(GetArg(call, "id"))),
+                "wait" => WaitProcess(GetArg(call, "id"), GetArgOrDefault(call, "timeout", "30"), ct),
+                "write"=> WriteProcess(GetArg(call, "id"), GetArg(call, "input")),
+                _      => Task.FromResult($"Error: Unknown action '{action}'. Valid actions: list, poll, log, wait, kill, write.")
+            };
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Error executing process action '{action}': {ex.Message}");
+        }
     }
 
     private Task<string> ListProcesses()
     {
         if (_procs.IsEmpty) return Task.FromResult("No background processes.");
         var lines = _procs.Values.Select(p =>
-            $"#{p.Id} PID={p.Proc.Id} | {p.Command} | Started: {p.StartedAt:HH:mm:ss} | " +
-            (p.Proc.HasExited ? $"Exited({p.Proc.ExitCode})" : "Running"));
+        {
+            string status;
+            try
+            {
+                status = p.Proc.HasExited ? $"Exited({p.Proc.ExitCode})" : "Running";
+            }
+            catch (InvalidOperationException)
+            {
+                status = "Unknown (process handle invalid)";
+            }
+            return $"#{p.Id} PID={p.Proc.Id} | {p.Command} | Started: {p.StartedAt:HH:mm:ss} | {status}";
+        });
         return Task.FromResult(System.String.Join('\n', lines));
     }
 
     private Task<string> KillProcess(string id)
     {
-        if (!_procs.TryRemove(id, out var bp)) return Task.FromResult($"Process #{id} not found.");
-        try { bp.Proc.Kill(entireProcessTree: true); } catch { /* already dead */ }
+        if (string.IsNullOrWhiteSpace(id))
+            return Task.FromResult("Error: id parameter is required for kill action.");
+        if (!_procs.TryRemove(id, out var bp))
+            return Task.FromResult($"Process #{id} not found.");
+
+        try
+        {
+            if (!bp.Proc.HasExited)
+            {
+                bp.Proc.Kill(entireProcessTree: true);
+                bp.Proc.WaitForExit(5000);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // process already exited
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult($"Process #{id} removed from registry but kill failed: {ex.Message}");
+        }
+        finally
+        {
+            try { bp.Proc.Dispose(); } catch { /* best effort */ }
+        }
         return Task.FromResult($"Process #{id} killed.");
     }
 
     private Task<string> PollProcess(string id)
     {
-        if (!_procs.TryGetValue(id, out var bp)) return Task.FromResult($"Process #{id} not found.");
-        return Task.FromResult(bp.Proc.HasExited
-            ? $"Process #{id} has exited with code {bp.Proc.ExitCode}."
-            : $"Process #{id} is still running (PID {bp.Proc.Id}).");
+        if (string.IsNullOrWhiteSpace(id))
+            return Task.FromResult("Error: id parameter is required for poll action.");
+        if (!_procs.TryGetValue(id, out var bp))
+            return Task.FromResult($"Process #{id} not found.");
+
+        try
+        {
+            return Task.FromResult(bp.Proc.HasExited
+                ? $"Process #{id} has exited with code {bp.Proc.ExitCode}."
+                : $"Process #{id} is still running (PID {bp.Proc.Id}).");
+        }
+        catch (InvalidOperationException)
+        {
+            return Task.FromResult($"Process #{id} handle is no longer valid.");
+        }
+    }
+
+    private string GetProcessLog(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return "Error: id parameter is required for log action.";
+        if (!_procs.TryGetValue(id, out var bp))
+            return $"Process #{id} not found.";
+
+        try
+        {
+            // StandardOutput/StandardError can only be read once if not redirected async.
+            // This is a best-effort snapshot; TerminalTool should own full log capture.
+            return bp.Proc.HasExited
+                ? $"Process #{id} exited with code {bp.Proc.ExitCode}. Full log capture requires TerminalTool integration."
+                : $"Process #{id} is running (PID {bp.Proc.Id}). Full log capture requires TerminalTool integration.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"Error reading process log: {ex.Message}";
+        }
+    }
+
+    private async Task<string> WaitProcess(string id, string timeoutStr, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return "Error: id parameter is required for wait action.";
+        if (!_procs.TryGetValue(id, out var bp))
+            return $"Process #{id} not found.";
+
+        var timeout = int.TryParse(timeoutStr, out var t) ? t : 30;
+        if (timeout <= 0) timeout = 30;
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(timeout));
+
+            await bp.Proc.WaitForExitAsync(cts.Token);
+            return $"Process #{id} exited with code {bp.Proc.ExitCode}.";
+        }
+        catch (OperationCanceledException)
+        {
+            return $"Error: Wait for process #{id} timed out after {timeout} seconds.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"Error waiting for process #{id}: {ex.Message}";
+        }
+    }
+
+    private Task<string> WriteProcess(string id, string input)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return Task.FromResult("Error: id parameter is required for write action.");
+        if (!_procs.TryGetValue(id, out var bp))
+            return Task.FromResult($"Process #{id} not found.");
+
+        try
+        {
+            if (bp.Proc.HasExited)
+                return Task.FromResult($"Error: Process #{id} has already exited.");
+
+            if (bp.Proc.StartInfo.RedirectStandardInput)
+            {
+                bp.Proc.StandardInput.WriteLine(input);
+                bp.Proc.StandardInput.Flush();
+                return Task.FromResult($"Wrote {input.Length} chars to process #{id} stdin.");
+            }
+
+            return Task.FromResult($"Error: Process #{id} was not started with stdin redirection.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Task.FromResult($"Error writing to process #{id}: {ex.Message}");
+        }
+        catch (System.IO.IOException ex)
+        {
+            return Task.FromResult($"Error writing to process #{id} stdin: {ex.Message}");
+        }
     }
 
     /// <summary>Called by TerminalTool when background=true to register the process.</summary>

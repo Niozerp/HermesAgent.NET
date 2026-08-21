@@ -44,6 +44,39 @@ Hermes includes over 35 built-in tools. Tools are categorized into "Toolsets".
 - `vision_analyze`: High-level description of images or base64 data.
 - `text_to_speech`: Convert responses to audio files.
 
+## Error Handling & Safety
+
+All tools inherit from `ToolBase`, which provides a standardized execution wrapper:
+
+- **Null-safety guards**: Validates `ToolCall`, `ToolCall.Name`, and `ToolCall.Arguments` before execution. Missing or malformed calls return a descriptive error result instead of throwing.
+- **Cancellation propagation**: `OperationCanceledException` is caught and reported as a timeout/cancellation error, never silently swallowed.
+- **Exception unwrapping**: `AggregateException` inner messages are flattened into the error string for clearer diagnostics.
+- **Null output protection**: If a tool returns `null`, it is normalized to `string.Empty` to prevent downstream null-reference issues.
+
+### `run_command` (ShellTool) — Process Safety
+
+| Feature | Behavior |
+|--------|----------|
+| Empty command | Returns `"Error: command parameter is required and cannot be empty."` |
+| Timeout clamp | `timeout_seconds` is clamped to `[1, 600]`. Default is 30s. |
+| Process start failure | Caught and returned as a descriptive error (e.g., executable not found). |
+| Timeout / Cancellation | Kills the entire process tree (`Kill(entireProcessTree: true)`), waits up to 5s for termination, and returns any partial output captured before the timeout. |
+| Thread-safe output | stdout/stderr are appended under a lock to prevent interleaved corruption. |
+| Exit reporting | If the process exits with no output, returns `[exit code N]`. |
+
+### `process` (ProcessTool) — Background Process Registry
+
+| Action | Safety |
+|--------|--------|
+| `list` | Handles `InvalidOperationException` from stale process handles. |
+| `kill` | Validates `id`, checks `HasExited` before kill, disposes the `Process` object, and reports partial failures. |
+| `poll` | Validates `id`, catches `InvalidOperationException` for invalid handles. |
+| `wait` | Validates `id`, clamps timeout to positive value, respects caller `CancellationToken`, reports timeout distinctly from exit. |
+| `write` | Validates `id`, checks `HasExited`, verifies `RedirectStandardInput`, catches `IOException` on broken pipes. |
+| Unknown action | Returns explicit error listing valid actions. |
+
+> **Note**: The `log` action is currently a stub that reports process status; full stdout/stderr log capture requires `TerminalTool` integration.
+
 ---
 
 ## Tool Signature Example: `patch`

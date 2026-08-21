@@ -1,6 +1,6 @@
 # Hermes Agent — .NET Edition (Vibe Coded) ☤
 
-A complete **.NET 10** implementation of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) — the self-improving AI agent with persistent memory, skills, and a multi-platform gateway.
+A complete **.NET 9** implementation of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) — the self-improving AI agent with persistent memory, skills, and a CLI.
 
 ## Architecture
 
@@ -12,8 +12,6 @@ HermesAgent/
 │   ├── HermesAgent.Tools/       # 35+ tools across 5 toolsets
 │   ├── HermesAgent.Skills/      # Skills manager + skill tools
 │   ├── HermesAgent.Memory/      # SQLite FTS5 memory + session manager
-│   ├── HermesAgent.Web/         # ASP.NET Core REST + SSE API
-│   ├── HermesAgent.Gateway/     # Telegram · Discord · Webhook gateway
 │   └── HermesAgent.Cli/         # Interactive CLI (Spectre.Console TUI)
 ├── skills/                      # Bundled skill library
 │   ├── github/                  # PR workflow, code review
@@ -48,15 +46,6 @@ cp .env.example .env \&\& nano .env   # set HERMES\_API\_KEY
 
 # CLI
 dotnet run --project src/HermesAgent.Cli
-
-# REST API  (http://localhost:7777)
-dotnet run --project src/HermesAgent.Web
-
-# Messaging Gateway (Telegram / Discord / Webhook)
-dotnet run --project src/HermesAgent.Gateway
-
-# Docker — run everything
-docker compose --profile full up
 ```
 
 ## Configuration
@@ -101,60 +90,6 @@ Priority order (highest wins):
   <memory enabled="true" />
   <skills enabled="true" autoCreateSkills="true" />
 </hermesSettings>
-```
-
-## Web API
-
-|Method|Path|Description|
-|-|-|-|
-|GET|`/health`|Health check|
-|GET|`/info`|Agent info (provider, model, tools, skills)|
-|POST|`/chat`|Chat (supports `stream: true` for SSE)|
-|GET|`/sessions`|List sessions|
-|GET|`/sessions/{id}`|Get session messages|
-|GET|`/sessions/{id}/summary`|LLM summary of session|
-|GET|`/skills`|List skills|
-|GET|`/skills/{name}`|Get skill detail|
-|POST|`/skills`|Create skill|
-|PATCH|`/skills/{name}`|Improve skill|
-|GET|`/memory`|Read persistent memory|
-|POST|`/memory/search`|FTS5 search across memory + sessions|
-|GET|`/tools`|List all tools|
-|POST|`/tools/run`|Execute a tool directly|
-
-### SSE Streaming
-
-```bash
-curl -N -X POST http://localhost:7777/chat \\
-  -H "Content-Type: application/json" \\
-  -d '{"message":"Write a haiku about .NET","stream":true}'
-
-# Events: delta, tool\_start, tool\_done, turn, done, error
-```
-
-## Gateway (Messaging Platforms)
-
-Configure in `app.config` or env vars:
-
-```bash
-# Telegram
-HERMES\_Gateway\_\_Telegram\_\_Enabled=true
-HERMES\_Gateway\_\_Telegram\_\_BotToken=123456:ABC-DEF...
-
-# Discord
-HERMES\_Gateway\_\_Discord\_\_Enabled=true
-HERMES\_Gateway\_\_Discord\_\_BotToken=...
-
-# Webhook (generic HTTP POST)
-HERMES\_Gateway\_\_Webhook\_\_Enabled=true
-HERMES\_Gateway\_\_Webhook\_\_Port=7788
-HERMES\_Gateway\_\_Webhook\_\_SecretKey=your-secret
-```
-
-Webhook payload format:
-
-```json
-{ "message": "task description", "chat\_id": "my-channel", "user\_id": "user1" }
 ```
 
 ## Supported LLM Providers
