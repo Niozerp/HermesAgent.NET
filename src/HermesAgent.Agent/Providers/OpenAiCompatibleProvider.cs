@@ -34,7 +34,24 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
         _http.BaseAddress = new Uri(baseUrl);
         _http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_options.ApiKey}");
         _http.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+
+        // Resolve the chat-completions endpoint once. Default OpenAI-style base URLs
+        // (e.g. https://api.openai.com) get "/v1/chat/completions" appended; base URLs
+        // that already carry a version segment (e.g. https://api.z.ai/api/paas/v4,
+        // http://localhost:11434/v1, https://openrouter.ai/api/v1) get only
+        // "/chat/completions" to avoid double-version paths like /v4/v1/chat/completions.
+        var trimmed = baseUrl.TrimEnd('/');
+        _chatEndpoint = trimmed.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("/v2", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("/v3", StringComparison.OrdinalIgnoreCase)
+            || trimmed.EndsWith("/v4", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Contains("/v1/", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Contains("/paas/", StringComparison.OrdinalIgnoreCase)
+            ? "chat/completions"
+            : "v1/chat/completions";
     }
+
+    private readonly string _chatEndpoint;
 
     public async Task<LlmResponse> CompleteAsync(IReadOnlyList<Message> messages, IReadOnlyList<ToolDefinition>? tools = null, CancellationToken ct = default)
     {
@@ -43,7 +60,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
 
         _logger.LogDebug("Sending {MessageCount} messages to {Provider}/{Model}", messages.Count, Name, _options.Model);
 
-        using var response = await _http.PostAsync("/v1/chat/completions",
+        using var response = await _http.PostAsync(_chatEndpoint,
             new StringContent(json, Encoding.UTF8, "application/json"), ct);
 
         response.EnsureSuccessStatusCode();
@@ -61,7 +78,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
         var request = BuildRequest(messages, tools, stream: true);
         var json = JsonSerializer.Serialize(request, JsonOpts);
 
-        using var requestMsg = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        using var requestMsg = new HttpRequestMessage(HttpMethod.Post, _chatEndpoint)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };

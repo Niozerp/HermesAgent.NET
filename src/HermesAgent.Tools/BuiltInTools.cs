@@ -76,8 +76,8 @@ public abstract class ToolBase : ITool
         {
             return Finish(new ToolResult
             {
-                ToolCallId = call.Id,
-                ToolName = call.Name,
+                ToolCallId = call?.Id ?? string.Empty,
+                ToolName = call?.Name ?? Name,
                 Output = "Error: Tool execution was cancelled (timeout or caller aborted).",
                 IsError = true,
                 Duration = sw.Elapsed
@@ -92,8 +92,8 @@ public abstract class ToolBase : ITool
 
             return Finish(new ToolResult
             {
-                ToolCallId = call.Id,
-                ToolName = call.Name,
+                ToolCallId = call?.Id ?? string.Empty,
+                ToolName = call?.Name ?? Name,
                 Output = $"Error: {message}",
                 IsError = true,
                 Duration = sw.Elapsed

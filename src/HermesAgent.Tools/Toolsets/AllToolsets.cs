@@ -74,7 +74,7 @@ public sealed class BrowserSnapshotTool : ToolBase
 {
     public override string Name => "browser_snapshot";
     public override string Description => "Get a text-based snapshot of the current page's interactive elements with ref IDs (e.g. @e1) for clicking/typing.";
-    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = null };
+    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = new Dictionary<string, ParameterDefinition>() };
     protected override async Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         if (PlaywrightSession.Page == null) return "Error: Call browser_navigate first.";
@@ -194,7 +194,7 @@ public sealed class BrowserBackTool : ToolBase
 {
     public override string Name => "browser_back";
     public override string Description => "Navigate back to the previous page.";
-    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = null };
+    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = new Dictionary<string, ParameterDefinition>() };
     protected override async Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         if (PlaywrightSession.Page == null) return "Error: Call browser_navigate first.";
@@ -207,7 +207,7 @@ public sealed class BrowserConsoleTool : ToolBase
 {
     public override string Name => "browser_console";
     public override string Description => "Get browser console output and JavaScript errors.";
-    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = null };
+    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = new Dictionary<string, ParameterDefinition>() };
     protected override Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         var logs = PlaywrightSession.ConsoleLogs.ToArray();
@@ -220,7 +220,7 @@ public sealed class BrowserGetImagesTool : ToolBase
 {
     public override string Name => "browser_get_images";
     public override string Description => "Get all images on the current page with URLs and alt text.";
-    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = null };
+    public override ToolDefinition Definition => new() { Name = Name, Description = Description, Parameters = new Dictionary<string, ParameterDefinition>() };
     protected override async Task<string> ExecuteCoreAsync(ToolCall call, CancellationToken ct)
     {
         if (PlaywrightSession.Page == null) return "Error: Call browser_navigate first.";
