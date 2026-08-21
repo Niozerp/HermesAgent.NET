@@ -60,6 +60,7 @@ static async Task RunChatAsync(IServiceProvider sp)
 {
     var agent = sp.GetRequiredService<IAgent>();
     using var cts = new CancellationTokenSource();
+    using var spinner = new ResponseSpinner();
     Guid? currentSession = null;
 
     AnsiConsole.Write(new FigletText("Hermes").Color(Color.Cyan1));
@@ -74,20 +75,44 @@ static async Task RunChatAsync(IServiceProvider sp)
         if (input == "/exit") break;
 
         AnsiConsole.Markup("[bold blue]Hermes>[/] ");
+        spinner.Start();
         try
         {
             await foreach (var evt in agent.RunStreamingAsync(input, currentSession, cts.Token))
             {
-                if (evt is AgentEvent.TextDelta d) Console.Write(d.Delta);
-                else if (evt is AgentEvent.ToolStarted t) AnsiConsole.Markup($"\n  [dim]⚙ {t.ToolName}...[/]");
-                else if (evt is AgentEvent.AgentFinished f)
+                switch (evt)
                 {
-                    currentSession = currentSession ?? Guid.NewGuid(); // Note: session ID should be captured from loop
-                    AnsiConsole.MarkupLine($"\n[dim]({f.Result.TurnsUsed} turns, {f.Result.Duration.TotalSeconds:0.0}s)[/]");
+                    case AgentEvent.TextDelta d:
+                        if (spinner.IsRunning) spinner.Stop();
+                        Console.Write(d.Delta);
+                        break;
+                    case AgentEvent.ToolStarted t:
+                        if (spinner.IsRunning) spinner.Stop();
+                        AnsiConsole.MarkupLine($"\n  [dim]⚙ {t.ToolName}...[/]");
+                        spinner.Start($"running {t.ToolName}");
+                        break;
+                    case AgentEvent.ToolCompleted:
+                        // Keep spinning with whatever label is current; next LLM round resumes
+                        // "thinking" when ToolStarted's label is replaced on the next TextDelta cycle.
+                        break;
+                    case AgentEvent.TurnCompleted:
+                        // Next turn begins with a fresh LLM call.
+                        spinner.SetLabel("thinking");
+                        break;
+                    case AgentEvent.AgentFinished f:
+                        if (spinner.IsRunning) spinner.Stop();
+                        currentSession = currentSession ?? Guid.NewGuid(); // Note: session ID should be captured from loop
+                        AnsiConsole.MarkupLine($"\n[dim]({f.Result.TurnsUsed} turns, {f.Result.Duration.TotalSeconds:0.0}s)[/]");
+                        break;
                 }
             }
         }
-        catch (Exception ex) { AnsiConsole.MarkupLine($"\n[red]Error:[/] {ex.Message}"); }
+        catch (Exception ex)
+        {
+            if (spinner.IsRunning) spinner.Stop();
+            AnsiConsole.MarkupLine($"\n[red]Error:[/] {ex.Message}");
+        }
+        spinner.Stop();
         Console.WriteLine();
     }
 }
