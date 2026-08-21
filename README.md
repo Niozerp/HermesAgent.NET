@@ -46,6 +46,11 @@ cp .env.example .env \&\& nano .env   # set HERMES\_API\_KEY
 
 # CLI
 dotnet run --project src/HermesAgent.Cli
+
+# Verbose debug tracing (DI registration, tool resolution, tool execution timing)
+# When hunting a hang: the LAST [DBG] line before the freeze is the culprit —
+# a "START" with no matching "OK" means that step never finished.
+HERMES_DEBUG=1 dotnet run --project src/HermesAgent.Cli
 ```
 
 ## Configuration

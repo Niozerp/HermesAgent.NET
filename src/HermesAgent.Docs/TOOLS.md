@@ -46,7 +46,29 @@ Hermes includes over 35 built-in tools. Tools are categorized into "Toolsets".
 
 ## Error Handling & Safety
 
-All tools inherit from `ToolBase`, which provides a standardized execution wrapper:
+### Debug Tracing (`HERMES_DEBUG=1`)
+
+Set `HERMES_DEBUG=1` to enable verbose console tracing of DI registration, tool-list resolution, and every tool execution:
+
+```
+[   0.068s] [DBG] TOOLS: resolving tool list
+[   0.069s] [DBG] TOOLS: START  resolve ShellTool
+[   0.069s] [DBG] TOOLS: OK     resolve ShellTool -> 'run_command'
+...
+[   0.101s] [DBG] TOOLS: total 40 tool(s) registered
+[   1.234s] [DBG] TOOL START  web_search (id=abc123)
+[   2.100s] [DBG] TOOL DONE   web_search (id=abc123) in 866 ms
+```
+
+**Hunting a hang**: every step logs `START` before and `OK`/`DONE`/`ERROR` after. If the app freezes, the **last logged line** identifies the hanging component — a `START` with no matching completion means that step never returned. Timestamps show elapsed time per step.
+
+Tracing is implemented in `HermesAgent.Tools/HermesDebug.cs` and wired into:
+- `ServiceRegistration.cs` — DI phase + per-tool resolution
+- `ToolBase.ExecuteAsync` — every tool call start/done/error with duration
+
+### ToolBase — Standardized Execution Wrapper
+
+All tools inherit from `ToolBase`, which provides:
 
 - **Null-safety guards**: Validates `ToolCall`, `ToolCall.Name`, and `ToolCall.Arguments` before execution. Missing or malformed calls return a descriptive error result instead of throwing.
 - **Cancellation propagation**: `OperationCanceledException` is caught and reported as a timeout/cancellation error, never silently swallowed.

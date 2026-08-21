@@ -157,10 +157,13 @@ public sealed record SubagentTask(string Id, string Task, string? Skill, string 
 /// </summary>
 public sealed class DelegateTaskTool : ToolBase
 {
-    private readonly IAgent _agent;
+    private readonly Lazy<IAgent> _agent;
     private readonly ILogger<DelegateTaskTool> _log;
 
-    public DelegateTaskTool(IAgent agent, ILogger<DelegateTaskTool> log)
+    // Lazy<IAgent> breaks the DI cycle: IEnumerable<ITool> -> DelegateTaskTool
+    // -> IAgent (HermesAgentLoop) -> IEnumerable<ITool>. Resolving the agent is
+    // deferred until the first actual delegation, when the tool list already exists.
+    public DelegateTaskTool(Lazy<IAgent> agent, ILogger<DelegateTaskTool> log)
     {
         _agent = agent;
         _log = log;
@@ -211,7 +214,7 @@ public sealed class DelegateTaskTool : ToolBase
                 subCts.CancelAfter(TimeSpan.FromSeconds(timeout));
                 try
                 {
-                    var result = await _agent.RunAsync(taskText, null, subCts.Token);
+                    var result = await _agent.Value.RunAsync(taskText, null, subCts.Token);
                     return (taskText, result.FinalResponse);
                 }
                 catch (Exception ex)
@@ -230,7 +233,7 @@ public sealed class DelegateTaskTool : ToolBase
                 subCts.CancelAfter(TimeSpan.FromSeconds(timeout));
                 try
                 {
-                    var result = await _agent.RunAsync(taskText, null, subCts.Token);
+                    var result = await _agent.Value.RunAsync(taskText, null, subCts.Token);
                     results.Add((taskText, result.FinalResponse));
                 }
                 catch (Exception ex)

@@ -15,24 +15,29 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddHermes(this IServiceCollection services)
     {
+        HermesDebug.Log("DI: registering LLM + agent services");
         services.AddHttpClient<OpenAiCompatibleProvider>();
         services.AddSingleton<ILlmProvider, OpenAiCompatibleProvider>();
         services.AddSingleton<ISystemPromptBuilder, SystemPromptBuilder>();
         services.AddSingleton<IContextCompressor, SlidingWindowContextCompressor>();
-        
+
         services.AddTransient<IAgent, HermesAgentLoop>();
         services.AddTransient<HermesAgentLoop>();
+        // Lazy<IAgent> lets DelegateTaskTool break the IEnumerable<ITool> DI cycle
+        services.AddTransient<Lazy<IAgent>>(sp => new Lazy<IAgent>(() => sp.GetRequiredService<IAgent>()));
 
+        HermesDebug.Log("DI: registering persistence (SQLite, skills)");
         // Use SQLite for production feel
         services.AddSingleton<SqliteSessionStore>();
         services.AddSingleton<ISessionManager>(sp => sp.GetRequiredService<SqliteSessionStore>());
         services.AddSingleton<IMemoryStore>(sp => sp.GetRequiredService<SqliteSessionStore>());
-        
+
         services.AddSingleton<ISkillManager, FileSkillManager>();
 
         services.AddSingleton<MemoryTools>();
         services.AddSingleton<SkillTools>();
 
+        HermesDebug.Log("DI: registering core tools");
         // Core Tools (HermesAgent.Tools)
         services.AddSingleton<ShellTool>();
         services.AddSingleton<ReadFileTool>();
@@ -42,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<WebFetchTool>();
         services.AddSingleton<WebFetchTool>();
 
+        HermesDebug.Log("DI: registering advanced toolsets");
         // Advanced Toolsets (HermesAgent.Tools.Toolsets)
         services.AddSingleton<PatchTool>();
         services.AddHttpClient<WebSearchTool>();
@@ -62,6 +68,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SessionSearchTool>();
         services.AddSingleton<ProcessTool>();
 
+        HermesDebug.Log("DI: registering browser toolsets");
         // Browser Toolsets
         services.AddSingleton<BrowserNavigateTool>();
         services.AddSingleton<BrowserSnapshotTool>();
@@ -78,49 +85,69 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IEnumerable<ITool>>(sp =>
         {
-            var tools = new List<ITool>
-            {
-                sp.GetRequiredService<ShellTool>(),
-                sp.GetRequiredService<ReadFileTool>(),
-                sp.GetRequiredService<WriteFileTool>(),
-                sp.GetRequiredService<ListDirectoryTool>(),
-                sp.GetRequiredService<SearchFilesTool>(),
-                sp.GetRequiredService<WebFetchTool>(),
-                
-                sp.GetRequiredService<PatchTool>(),
-                sp.GetRequiredService<WebSearchTool>(),
-                sp.GetRequiredService<WebExtractTool>(),
-                sp.GetRequiredService<VisionAnalyzeTool>(),
-                sp.GetRequiredService<ClarifyTool>(),
-                sp.GetRequiredService<TodoTool>(),
-                sp.GetRequiredService<ImageGenerateTool>(),
-                sp.GetRequiredService<MixtureOfAgentsTool>(),
-                sp.GetRequiredService<SendMessageTool>(),
-                sp.GetRequiredService<TextToSpeechTool>(),
-                sp.GetRequiredService<CronJobTool>(),
-                sp.GetRequiredService<DelegateTaskTool>(),
-                sp.GetRequiredService<ExecuteCodeTool>(),
-                sp.GetRequiredService<SessionSearchTool>(),
-                sp.GetRequiredService<ProcessTool>(),
+            HermesDebug.Log("TOOLS: resolving tool list");
 
-                sp.GetRequiredService<BrowserNavigateTool>(),
-                sp.GetRequiredService<BrowserSnapshotTool>(),
-                sp.GetRequiredService<BrowserClickTool>(),
-                sp.GetRequiredService<BrowserTypeTool>(),
-                sp.GetRequiredService<BrowserPressTool>(),
-                sp.GetRequiredService<BrowserScrollTool>(),
-                sp.GetRequiredService<BrowserBackTool>(),
-                sp.GetRequiredService<BrowserConsoleTool>(),
-                sp.GetRequiredService<BrowserGetImagesTool>(),
-                sp.GetRequiredService<BrowserVisionTool>(),
-                sp.GetRequiredService<BrowserDialogTool>(),
-                sp.GetRequiredService<BrowserCdpTool>()
-            };
-            tools.AddRange(sp.GetRequiredService<MemoryTools>().GetTools());
-            tools.AddRange(sp.GetRequiredService<SkillTools>().GetTools());
+            var tools = new List<ITool>();
+            void Add<T>(Func<T> resolve) where T : ITool
+            {
+                var name = typeof(T).Name;
+                HermesDebug.Log($"TOOLS: START  resolve {name}");
+                var instance = resolve();
+                tools.Add(instance);
+                HermesDebug.Log($"TOOLS: OK     resolve {name} -> '{instance.Name}'");
+            }
+
+            Add<ShellTool>(() => sp.GetRequiredService<ShellTool>());
+            Add<ReadFileTool>(() => sp.GetRequiredService<ReadFileTool>());
+            Add<WriteFileTool>(() => sp.GetRequiredService<WriteFileTool>());
+            Add<ListDirectoryTool>(() => sp.GetRequiredService<ListDirectoryTool>());
+            Add<SearchFilesTool>(() => sp.GetRequiredService<SearchFilesTool>());
+            Add<WebFetchTool>(() => sp.GetRequiredService<WebFetchTool>());
+
+            Add<PatchTool>(() => sp.GetRequiredService<PatchTool>());
+            Add<WebSearchTool>(() => sp.GetRequiredService<WebSearchTool>());
+            Add<WebExtractTool>(() => sp.GetRequiredService<WebExtractTool>());
+            Add<VisionAnalyzeTool>(() => sp.GetRequiredService<VisionAnalyzeTool>());
+            Add<ClarifyTool>(() => sp.GetRequiredService<ClarifyTool>());
+            Add<TodoTool>(() => sp.GetRequiredService<TodoTool>());
+            Add<ImageGenerateTool>(() => sp.GetRequiredService<ImageGenerateTool>());
+            Add<MixtureOfAgentsTool>(() => sp.GetRequiredService<MixtureOfAgentsTool>());
+            Add<SendMessageTool>(() => sp.GetRequiredService<SendMessageTool>());
+            Add<TextToSpeechTool>(() => sp.GetRequiredService<TextToSpeechTool>());
+            Add<CronJobTool>(() => sp.GetRequiredService<CronJobTool>());
+            Add<DelegateTaskTool>(() => sp.GetRequiredService<DelegateTaskTool>());
+            Add<ExecuteCodeTool>(() => sp.GetRequiredService<ExecuteCodeTool>());
+            Add<SessionSearchTool>(() => sp.GetRequiredService<SessionSearchTool>());
+            Add<ProcessTool>(() => sp.GetRequiredService<ProcessTool>());
+
+            Add<BrowserNavigateTool>(() => sp.GetRequiredService<BrowserNavigateTool>());
+            Add<BrowserSnapshotTool>(() => sp.GetRequiredService<BrowserSnapshotTool>());
+            Add<BrowserClickTool>(() => sp.GetRequiredService<BrowserClickTool>());
+            Add<BrowserTypeTool>(() => sp.GetRequiredService<BrowserTypeTool>());
+            Add<BrowserPressTool>(() => sp.GetRequiredService<BrowserPressTool>());
+            Add<BrowserScrollTool>(() => sp.GetRequiredService<BrowserScrollTool>());
+            Add<BrowserBackTool>(() => sp.GetRequiredService<BrowserBackTool>());
+            Add<BrowserConsoleTool>(() => sp.GetRequiredService<BrowserConsoleTool>());
+            Add<BrowserGetImagesTool>(() => sp.GetRequiredService<BrowserGetImagesTool>());
+            Add<BrowserVisionTool>(() => sp.GetRequiredService<BrowserVisionTool>());
+            Add<BrowserDialogTool>(() => sp.GetRequiredService<BrowserDialogTool>());
+            Add<BrowserCdpTool>(() => sp.GetRequiredService<BrowserCdpTool>());
+
+            HermesDebug.Log("TOOLS: START  resolve MemoryTools.GetTools()");
+            var mem = sp.GetRequiredService<MemoryTools>().GetTools();
+            tools.AddRange(mem);
+            HermesDebug.Log($"TOOLS: OK     resolve MemoryTools.GetTools() -> {mem.Count()} tool(s)");
+
+            HermesDebug.Log("TOOLS: START  resolve SkillTools.GetTools()");
+            var skl = sp.GetRequiredService<SkillTools>().GetTools();
+            tools.AddRange(skl);
+            HermesDebug.Log($"TOOLS: OK     resolve SkillTools.GetTools() -> {skl.Count()} tool(s)");
+
+            HermesDebug.Log($"TOOLS: total {tools.Count} tool(s) registered");
             return tools;
         });
 
+        HermesDebug.Log("DI: registration complete");
         return services;
     }
 }

@@ -15,67 +15,73 @@ public abstract class ToolBase : ITool
     public async Task<ToolResult> ExecuteAsync(ToolCall call, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
+        HermesDebug.Log($"TOOL START  {Name} (id={call?.Id})");
+        ToolResult Finish(ToolResult r)
+        {
+            HermesDebug.Log($"TOOL {(r.IsError ? "ERROR" : "DONE ")}  {Name} (id={r.ToolCallId}) in {sw.Elapsed.TotalMilliseconds:0} ms");
+            return r;
+        }
         try
         {
             // Guard against null call
             if (call is null)
             {
-                return new ToolResult
+                return Finish(new ToolResult
                 {
                     ToolCallId = string.Empty,
                     ToolName = Name,
                     Output = "Error: Tool call was null.",
                     IsError = true,
                     Duration = sw.Elapsed
-                };
+                });
             }
 
             // Guard against missing/empty tool name
             if (string.IsNullOrWhiteSpace(call.Name))
             {
-                return new ToolResult
+                return Finish(new ToolResult
                 {
                     ToolCallId = call.Id,
                     ToolName = Name,
                     Output = "Error: Tool call name was missing or empty.",
                     IsError = true,
                     Duration = sw.Elapsed
-                };
+                });
             }
 
             // Guard against null arguments dictionary
             if (call.Arguments is null)
             {
-                return new ToolResult
+                return Finish(new ToolResult
                 {
                     ToolCallId = call.Id,
                     ToolName = call.Name,
                     Output = "Error: Tool call arguments dictionary was null.",
                     IsError = true,
                     Duration = sw.Elapsed
-                };
+                });
             }
 
             var output = await ExecuteCoreAsync(call, ct);
-            return new ToolResult
+            return Finish(new ToolResult
             {
                 ToolCallId = call.Id,
                 ToolName = call.Name,
                 Output = output ?? string.Empty,
                 IsError = false,
                 Duration = sw.Elapsed
-            };
+            });
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return new ToolResult
+            return Finish(new ToolResult
             {
                 ToolCallId = call.Id,
                 ToolName = call.Name,
                 Output = "Error: Tool execution was cancelled (timeout or caller aborted).",
                 IsError = true,
                 Duration = sw.Elapsed
-            };
+            });
         }
         catch (Exception ex)
         {
@@ -84,14 +90,14 @@ public abstract class ToolBase : ITool
                 ? string.Join("; ", agg.InnerExceptions.Select(e => e.Message))
                 : ex.Message;
 
-            return new ToolResult
+            return Finish(new ToolResult
             {
                 ToolCallId = call.Id,
                 ToolName = call.Name,
                 Output = $"Error: {message}",
                 IsError = true,
                 Duration = sw.Elapsed
-            };
+            });
         }
     }
 
