@@ -59,63 +59,172 @@ switch (command)
 static async Task RunChatAsync(IServiceProvider sp)
 {
     var agent = sp.GetRequiredService<IAgent>();
+
     using var cts = new CancellationTokenSource();
     using var spinner = new ResponseSpinner();
+
     Guid? currentSession = null;
 
-    AnsiConsole.Write(new FigletText("Hermes").Color(Color.Cyan1));
-    AnsiConsole.MarkupLine("[dim]The self-improving AI agent — .NET edition[/]\n");
+    AnsiConsole.Write(
+        new FigletText("Hermes")
+            .Color(Color.Cyan1));
+
+    AnsiConsole.MarkupLine(
+        "[dim]The self-improving AI agent — .NET edition[/]\n");
 
     while (!cts.Token.IsCancellationRequested)
     {
-        var input = AnsiConsole.Prompt(new TextPrompt<string>("[bold green]You>[/]").AllowEmpty());
-        if (string.IsNullOrWhiteSpace(input)) continue;
+        var input = AnsiConsole.Prompt(
+            new TextPrompt<string>("[bold green]You>[/] ")
+                .AllowEmpty());
 
-        if (input == "/new") { currentSession = null; Console.WriteLine("New session started."); continue; }
-        if (input == "/exit") break;
+        if (string.IsNullOrWhiteSpace(input))
+            continue;
 
-        AnsiConsole.Markup("[bold blue]Hermes>[/] ");
-        spinner.Start();
+        if (input == "/new")
+        {
+            currentSession = null;
+            AnsiConsole.MarkupLine("[dim]New session started.[/]\n");
+            continue;
+        }
+
+        if (input == "/exit")
+            break;
+
+        // Tracks whether the next TextDelta needs a new Hermes> prefix.
+        bool waitingForHermesText = true;
+
+        // Start in the LLM thinking state.
+        spinner.Start("thinking");
+
         try
         {
-            await foreach (var evt in agent.RunStreamingAsync(input, currentSession, cts.Token))
+            await foreach (
+                var evt in agent.RunStreamingAsync(
+                    input,
+                    currentSession,
+                    cts.Token))
             {
                 switch (evt)
                 {
                     case AgentEvent.TextDelta d:
-                        if (spinner.IsRunning) spinner.Stop();
-                        Console.Write(d.Delta);
-                        break;
+                        {
+                            // The LLM has produced visible output.
+                            // Remove the spinner before writing streamed text.
+                            if (spinner.IsRunning)
+                                spinner.Stop();
+
+                            // Print Hermes> only at the beginning of a new
+                            // visible response block.
+                            if (waitingForHermesText)
+                            {
+                                AnsiConsole.Markup("[bold blue]Hermes>[/] ");
+                                waitingForHermesText = false;
+                            }
+
+                            Console.Write(d.Delta);
+                            break;
+                        }
+
                     case AgentEvent.ToolStarted t:
-                        if (spinner.IsRunning) spinner.Stop();
-                        AnsiConsole.MarkupLine($"\n  [dim]⚙ {t.ToolName}...[/]");
-                        spinner.Start($"running {t.ToolName}");
-                        break;
+                        {
+                            if (spinner.IsRunning)
+                                spinner.Stop();
+
+                            // If Hermes was already streaming text,
+                            // terminate that line before showing the tool.
+                            if (!waitingForHermesText)
+                                Console.WriteLine();
+
+                            AnsiConsole.MarkupLine(
+                                $"  [dim]⚙ {Markup.Escape(t.ToolName)}[/]");
+
+                            spinner.Start($"running {t.ToolName}");
+
+                            // Any text after the tool is a new Hermes response block.
+                            waitingForHermesText = true;
+
+                            break;
+                        }
+
                     case AgentEvent.ToolCompleted:
-                        // Keep spinning with whatever label is current; next LLM round resumes
-                        // "thinking" when ToolStarted's label is replaced on the next TextDelta cycle.
-                        break;
+                        {
+                            // Tool execution is over.
+                            // The agent is now waiting for / processing the
+                            // next LLM response.
+                            if (spinner.IsRunning)
+                                spinner.Stop();
+
+                            spinner.Start("thinking");
+
+                            waitingForHermesText = true;
+
+                            break;
+                        }
+
                     case AgentEvent.TurnCompleted:
-                        // Next turn begins with a fresh LLM call.
-                        spinner.SetLabel("thinking");
-                        break;
+                        {
+                            // A turn may complete before another LLM round begins.
+                            // Make sure the UI represents that as thinking.
+                            if (spinner.IsRunning)
+                            {
+                                spinner.SetLabel("thinking");
+                            }
+                            else
+                            {
+                                spinner.Start("thinking");
+                            }
+
+                            waitingForHermesText = true;
+
+                            break;
+                        }
+
                     case AgentEvent.AgentFinished f:
-                        if (spinner.IsRunning) spinner.Stop();
-                        currentSession = currentSession ?? Guid.NewGuid(); // Note: session ID should be captured from loop
-                        AnsiConsole.MarkupLine($"\n[dim]({f.Result.TurnsUsed} turns, {f.Result.Duration.TotalSeconds:0.0}s)[/]");
-                        break;
+                        {
+                            if (spinner.IsRunning)
+                                spinner.Stop();
+
+                            // Finish whatever streamed Hermes output is on screen.
+                            if (!waitingForHermesText)
+                                Console.WriteLine();
+
+                            currentSession ??= Guid.NewGuid();
+
+                            AnsiConsole.MarkupLine(
+                                $"[dim]({f.Result.TurnsUsed} turns, " +
+                                $"{f.Result.Duration.TotalSeconds:0.0}s)[/]");
+
+                            break;
+                        }
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            if (spinner.IsRunning)
+                spinner.Stop();
+
+            AnsiConsole.MarkupLine("\n[dim]Cancelled.[/]");
+        }
         catch (Exception ex)
         {
-            if (spinner.IsRunning) spinner.Stop();
-            AnsiConsole.MarkupLine($"\n[red]Error:[/] {ex.Message}");
+            if (spinner.IsRunning)
+                spinner.Stop();
+
+            AnsiConsole.MarkupLine(
+                $"\n[red]Error:[/] {Markup.Escape(ex.Message)}");
         }
-        spinner.Stop();
+        finally
+        {
+            if (spinner.IsRunning)
+                spinner.Stop();
+        }
+
         Console.WriteLine();
     }
 }
+
 
 static async Task RunSkillsAsync(IServiceProvider sp)
 {
