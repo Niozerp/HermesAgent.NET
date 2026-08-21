@@ -92,6 +92,15 @@ public class AgentLoopTests
         result.TurnsUsed.Should().Be(2);
         result.ToolResults.Should().HaveCount(1);
         result.ToolResults[0].Output.Should().Be("4");
+
+        var secondRequest = _llm.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(ILlmProvider.CompleteAsync))
+            .Select(c => (IReadOnlyList<Message>)c.GetArguments()[0]!)
+            .Last();
+        secondRequest.Should().Contain(m => m.Role == "assistant" &&
+            m.ToolCalls!.Single().Id == "1");
+        secondRequest.Should().Contain(m => m.Role == "tool" &&
+            m.ToolCallId == "1" && m.Content == "4");
     }
 
     [Fact]

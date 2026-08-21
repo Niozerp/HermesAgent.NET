@@ -68,7 +68,11 @@ public sealed class HermesAgentLoop : IAgent
             var messages = await BuildMessagesAsync(conversation, ct);
             var response = await _llm.CompleteAsync(messages, toolDefs, ct);
 
-            if (!string.IsNullOrEmpty(response.Content))
+            if (response.ToolCalls.Count > 0)
+            {
+                conversation.AddMessage(Message.AssistantToolCalls(response.Content, response.ToolCalls));
+            }
+            else if (!string.IsNullOrEmpty(response.Content))
             {
                 finalResponse = response.Content;
                 conversation.AddMessage(Message.Assistant(response.Content));
@@ -81,7 +85,7 @@ public sealed class HermesAgentLoop : IAgent
             results.AddRange(toolResults);
 
             foreach (var tr in toolResults)
-                conversation.AddMessage(Message.ToolResult(tr.ToolName, tr.Output));
+                conversation.AddMessage(Message.ToolResult(tr.ToolCallId, tr.ToolName, tr.Output));
 
             if (turn % _options.Agent.SkillNudgeIntervalTurns == 0 && _options.Agent.EnableSkillNudging)
                 await NudgeSkillCreationAsync(conversation, ct);
@@ -92,6 +96,7 @@ public sealed class HermesAgentLoop : IAgent
         return new AgentRunResult
         {
             FinalResponse = finalResponse,
+            SessionId = conversation.Id,
             TurnsUsed = turn,
             ToolResults = results,
             Duration = DateTimeOffset.UtcNow - startTime,
@@ -149,29 +154,35 @@ public sealed class HermesAgentLoop : IAgent
                 }
             }
 
-            var assistantMsg = fullText.ToString();
-            if (!string.IsNullOrEmpty(assistantMsg))
-                conversation.AddMessage(Message.Assistant(assistantMsg));
-
             if (toolCallMap.Count == 0)
+            {
+                var assistantMsg = fullText.ToString();
+                if (!string.IsNullOrEmpty(assistantMsg))
+                    conversation.AddMessage(Message.Assistant(assistantMsg));
                 break;
+            }
 
-            // Execute collected tool calls
-            foreach (var kvp in toolCallMap.OrderBy(k => k.Key))
+            var collectedToolCalls = toolCallMap.OrderBy(k => k.Key).Select(kvp =>
             {
                 var val = kvp.Value;
-                var toolCall = new ToolCall
+                return new ToolCall
                 {
                     Id = val.Id ?? Guid.NewGuid().ToString(),
                     Name = val.Name ?? string.Empty,
                     Arguments = OpenAiCompatibleProvider.ParseArguments(val.Args.ToString())
                 };
+            }).ToList();
 
+            conversation.AddMessage(Message.AssistantToolCalls(fullText.ToString(), collectedToolCalls));
+
+            // Execute collected tool calls
+            foreach (var toolCall in collectedToolCalls)
+            {
                 yield return new AgentEvent.ToolStarted(toolCall.Name, toolCall.Arguments);
                 
                 var toolResult = await ExecuteSingleToolAsync(toolCall, ct);
                 allToolResults.Add(toolResult);
-                conversation.AddMessage(Message.ToolResult(toolResult.ToolName, toolResult.Output));
+                conversation.AddMessage(Message.ToolResult(toolResult.ToolCallId, toolResult.ToolName, toolResult.Output));
                 
                 yield return new AgentEvent.ToolCompleted(toolResult);
             }
@@ -187,6 +198,7 @@ public sealed class HermesAgentLoop : IAgent
         var finalResult = new AgentRunResult
         {
             FinalResponse = conversation.Messages.LastOrDefault(m => m.Role == "assistant")?.Content ?? string.Empty,
+            SessionId = conversation.Id,
             TurnsUsed = turn,
             ToolResults = allToolResults,
             Duration = DateTimeOffset.UtcNow - startTime,
