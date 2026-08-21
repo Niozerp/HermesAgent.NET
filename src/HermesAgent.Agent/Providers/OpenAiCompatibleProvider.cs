@@ -55,7 +55,7 @@ public sealed class OpenAiCompatibleProvider : ILlmProvider
                     ? "chat/completions"
                     : "v1/chat/completions";
 
-                _logger.LogDebug("Provider configured: base={BaseUri} endpoint={Endpoint} model={Model}",
+                _logger.LogInformation("Provider configured: base={BaseUri} endpoint={Endpoint} model={Model}",
             baseUri, _chatEndpoint, _options.Model);
             }
 

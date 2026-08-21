@@ -21,7 +21,7 @@ var config = new ConfigurationBuilder()
     .Build();
 
 var services = new ServiceCollection();
-services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
+services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
 
 services.Configure<HermesOptions>(config.GetSection(HermesOptions.SectionName));
 services.AddHermes();
